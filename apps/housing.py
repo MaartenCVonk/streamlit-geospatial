@@ -124,7 +124,7 @@ def get_periods(df):
     return [str(d) for d in list(set(df["month_date_yyyymm"].tolist()))]
 
 
-@st.cache
+#@st.cache
 def get_geom_data(category):
 
     prefix = (

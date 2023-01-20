@@ -1,14 +1,11 @@
-import datetime
 import os
-import pathlib
-import requests
-import zipfile
 import pandas as pd
 import pydeck as pdk
 import geopandas as gpd
 import streamlit as st
 import leafmap.colormaps as cm
 from leafmap.common import hex_to_rgb
+import sys
 
 st.set_page_config(layout="wide")
 
@@ -23,106 +20,25 @@ st.sidebar.info(
 st.sidebar.title("Contact")
 st.sidebar.info(
     """
-    Qiusheng Wu: <https://wetlands.io>
-    [GitHub](https://github.com/giswqs) | [Twitter](https://twitter.com/giswqs) | [YouTube](https://www.youtube.com/c/QiushengWu) | [LinkedIn](https://www.linkedin.com/in/qiushengwu)
+    Maarten Vonk: <https://www.HCSS.nl>
+    [GitHub](https://github.com/MaartenCVonk) 
     """
 )
 
-STREAMLIT_STATIC_PATH = pathlib.Path(st.__path__[0]) / "static"
-# We create a downloads directory within the streamlit static asset directory
-# and we write output files to it
-DOWNLOADS_PATH = STREAMLIT_STATIC_PATH / "downloads"
-if not DOWNLOADS_PATH.is_dir():
-    DOWNLOADS_PATH.mkdir()
-
-# Data source: https://www.realtor.com/research/data/
-# link_prefix = "https://econdata.s3-us-west-2.amazonaws.com/Reports/"
-link_prefix = "https://raw.githubusercontent.com/giswqs/data/main/housing/"
-
+link_prefix = "https://storage.googleapis.com/location-grid-gis-layers/"
+directory = os.path.join(os.getcwd(), "data/")
 data_links = {
-    "weekly": {
-        "national": link_prefix + "Core/listing_weekly_core_aggregate_by_country.csv",
-        "metro": link_prefix + "Core/listing_weekly_core_aggregate_by_metro.csv",
-    },
     "monthly_current": {
-        "national": link_prefix + "Core/RDC_Inventory_Core_Metrics_Country.csv",
-        "state": link_prefix + "Core/RDC_Inventory_Core_Metrics_State.csv",
-        "metro": link_prefix + "Core/RDC_Inventory_Core_Metrics_Metro.csv",
-        "county": link_prefix + "Core/RDC_Inventory_Core_Metrics_County.csv",
-        "zip": link_prefix + "Core/RDC_Inventory_Core_Metrics_Zip.csv",
-    },
-    "monthly_historical": {
-        "national": link_prefix + "Core/RDC_Inventory_Core_Metrics_Country_History.csv",
-        "state": link_prefix + "Core/RDC_Inventory_Core_Metrics_State_History.csv",
-        "metro": link_prefix + "Core/RDC_Inventory_Core_Metrics_Metro_History.csv",
-        "county": link_prefix + "Core/RDC_Inventory_Core_Metrics_County_History.csv",
-        "zip": link_prefix + "Core/RDC_Inventory_Core_Metrics_Zip_History.csv",
-    },
-    "hotness": {
-        "metro": link_prefix
-        + "Hotness/RDC_Inventory_Hotness_Metrics_Metro_History.csv",
-        "county": link_prefix
-        + "Hotness/RDC_Inventory_Hotness_Metrics_County_History.csv",
-        "zip": link_prefix + "Hotness/RDC_Inventory_Hotness_Metrics_Zip_History.csv",
-    },
+        "national": directory + "MEI_FIN_19012023181514641.csv",
+        "subnational": directory + "MEI_FIN_19012023181514641.csv",
+}
 }
 
-
-def get_data_columns(df, category, frequency="monthly"):
-    if frequency == "monthly":
-        if category.lower() == "county":
-            del_cols = ["month_date_yyyymm", "county_fips", "county_name"]
-        elif category.lower() == "state":
-            del_cols = ["month_date_yyyymm", "state", "state_id"]
-        elif category.lower() == "national":
-            del_cols = ["month_date_yyyymm", "country"]
-        elif category.lower() == "metro":
-            del_cols = ["month_date_yyyymm", "cbsa_code", "cbsa_title", "HouseholdRank"]
-        elif category.lower() == "zip":
-            del_cols = ["month_date_yyyymm", "postal_code", "zip_name", "flag"]
-    elif frequency == "weekly":
-        if category.lower() == "national":
-            del_cols = ["week_end_date", "geo_country"]
-        elif category.lower() == "metro":
-            del_cols = ["week_end_date", "cbsa_code", "cbsa_title", "hh_rank"]
-
-    cols = df.columns.values.tolist()
-
-    for col in cols:
-        if col.strip() in del_cols:
-            cols.remove(col)
-    if category.lower() == "metro":
-        return cols[2:]
-    else:
-        return cols[1:]
-
-
-@st.cache
+#@st.cache
 def get_inventory_data(url):
     df = pd.read_csv(url)
-    url = url.lower()
-    if "county" in url:
-        df["county_fips"] = df["county_fips"].map(str)
-        df["county_fips"] = df["county_fips"].str.zfill(5)
-    elif "state" in url:
-        df["STUSPS"] = df["state_id"].str.upper()
-    elif "metro" in url:
-        df["cbsa_code"] = df["cbsa_code"].map(str)
-    elif "zip" in url:
-        df["postal_code"] = df["postal_code"].map(str)
-        df["postal_code"] = df["postal_code"].str.zfill(5)
-
-    if "listing_weekly_core_aggregate_by_country" in url:
-        columns = get_data_columns(df, "national", "weekly")
-        for column in columns:
-            if column != "median_days_on_market_by_day_yy":
-                df[column] = df[column].str.rstrip("%").astype(float) / 100
-    if "listing_weekly_core_aggregate_by_metro" in url:
-        columns = get_data_columns(df, "metro", "weekly")
-        for column in columns:
-            if column != "median_days_on_market_by_day_yy":
-                df[column] = df[column].str.rstrip("%").astype(float) / 100
-        df["cbsa_code"] = df["cbsa_code"].str[:5]
+    df['month_date_yyyymm'] = df['TIME'].replace('-', '', regex=True).astype(int)
+    df = df[['TIME', 'Country', 'Value', 'month_date_yyyymm']]
     return df
 
 
@@ -143,41 +59,32 @@ def get_periods(df):
 
 #@st.cache
 def get_geom_data(category):
-
-    prefix = (
-        "https://raw.githubusercontent.com/giswqs/streamlit-geospatial/master/data/"
-    )
-    directory = os.getcwd()
-    st.write(directory)
+    prefix = ("https://storage.googleapis.com/location-grid-gis-layers/")
     links = {
-        "national": prefix + "us_nation.geojson",
-        #"national":  directory+ "/data/world-administrative-boundaries.geojson",
-        "state": prefix + "us_states.geojson",
-        "county": prefix + "us_counties.geojson",
-        "metro": prefix + "us_metro_areas.geojson",
-        "zip": "https://www2.census.gov/geo/tiger/GENZ2018/shp/cb_2018_us_zcta510_500k.zip",
+        "national":  directory+ "world-administrative-boundaries.geojson",
+        "subnational": prefix + "fra_admin1.geojson",
     }
-    st.write(category.lower())
     gdf = gpd.read_file(links[category])
+    if category == 'national':
+        gdf = gdf[['name','geometry']]
+        gdf.rename(columns={'name': 'Name'}, inplace=True)
+    if category == 'subnational':
+        gdf = gdf[['admin1_name','geometry']]
+        gdf.rename(columns={'admin1_name': 'Name'}, inplace=True)
     return gdf
 
 
 def join_attributes(gdf, df, category):
 
     new_gdf = None
-    if category == "county":
-        new_gdf = gdf.merge(df, left_on="GEOID", right_on="county_fips", how="outer")
-    elif category == "state":
-        new_gdf = gdf.merge(df, left_on="STUSPS", right_on="STUSPS", how="outer")
-    elif category == "national":
-        if "geo_country" in df.columns.values.tolist():
-            df["country"] = None
-            df.loc[0, "country"] = "United States"
-        new_gdf = gdf.merge(df, left_on="NAME", right_on="country", how="outer")
-    elif category == "metro":
-        new_gdf = gdf.merge(df, left_on="CBSAFP", right_on="cbsa_code", how="outer")
-    elif category == "zip":
-        new_gdf = gdf.merge(df, left_on="GEOID10", right_on="postal_code", how="outer")
+    if category == "national":
+        new_gdf = gdf
+        new_gdf['TIME'] = 202112
+        new_gdf['Value'] = 1
+    elif category == "subnational":
+        new_gdf = gdf
+        new_gdf['TIME'] = 202112
+        new_gdf['Value'] = 1
     return new_gdf
 
 
@@ -190,29 +97,12 @@ def select_null(gdf, col_name):
     new_gdf = gdf[gdf[col_name].isna()]
     return new_gdf
 
-
 def get_data_dict(name):
-    in_csv = os.path.join(os.getcwd(), "data/realtor_data_dict.csv")
+    in_csv = os.path.join(os.getcwd(), "data/goc-data.csv")
     df = pd.read_csv(in_csv)
     label = list(df[df["Name"] == name]["Label"])[0]
     desc = list(df[df["Name"] == name]["Description"])[0]
     return label, desc
-
-
-# def get_weeks(df):
-#     seq = list(set(df[~df["week_end_date"].isnull()]["week_end_date"].tolist()))
-#     weeks = [
-#         datetime.date(int(d.split("/")[2]), int(d.split("/")[0]), int(d.split("/")[1]))
-#         for d in seq
-#     ]
-#     weeks.sort()
-#     return weeks
-#
-#
-# def get_saturday(in_date):
-#     idx = (in_date.weekday() + 1) % 7
-#     sat = in_date + datetime.timedelta(6 - idx)
-#     return sat
 
 
 def app():
@@ -224,7 +114,7 @@ def app():
     )
 
     row1_col1, row1_col2, row1_col3, row1_col4, row1_col5 = st.columns(
-        [0.6, 0.8, 0.6, 1.4, 2]
+        [1, 1, 0.6, 1.4, 2]
     )
     with row1_col1:
         frequency = st.selectbox("Monthly/weekly data", ["Monthly", "Weekly"])
@@ -239,42 +129,20 @@ def app():
     with row1_col3:
         if frequency == "Monthly":
             scale = st.selectbox(
-                "Scale", ["National"], index=0
+                "Scale", ["National", "Subnational"], index=0
             )
         else:
-            scale = st.selectbox("Scale", ["National"], index=0)
+            scale = st.selectbox("Scale", ["National", 'Subnational'], index=0)
 
     gdf = get_geom_data(scale.lower())
 
-
-    # if frequency == "Weekly":
-    #     inventory_df = get_inventory_data(data_links["weekly"][scale.lower()])
-    #     weeks = get_weeks(inventory_df)
-    #     with row1_col1:
-    #         selected_date = st.date_input("Select a date", value=weeks[-1])
-    #         saturday = get_saturday(selected_date)
-    #         selected_period = saturday.strftime("%-m/%-d/%Y")
-    #         if saturday not in weeks:
-    #             st.error(
-    #                 "The selected date is not available in the data. Please select a date between {} and {}".format(
-    #                     weeks[0], weeks[-1]
-    #                 )
-    #             )
-    #             selected_period = weeks[-1].strftime("%-m/%-d/%Y")
-    #     inventory_df = get_inventory_data(data_links["weekly"][scale.lower()])
-    #     inventory_df = filter_weekly_inventory(inventory_df, selected_period)
-
     if frequency == "Monthly":
         if cur_hist == "Current month data":
-            inventory_df = get_inventory_data(
-                data_links["monthly_current"][scale.lower()]
-            )
+            inventory_df = get_inventory_data(data_links["monthly_current"][scale.lower()])
             selected_period = get_periods(inventory_df)[0]
         else:
             with row1_col2:
-                inventory_df = get_inventory_data(
-                    data_links["monthly_historical"][scale.lower()]
-                )
+                inventory_df = get_inventory_data(data_links["monthly_historical"][scale.lower()])
                 start_year, end_year = get_start_end_year(inventory_df)
                 periods = get_periods(inventory_df)
                 with st.expander("Select year and month", True):
@@ -300,7 +168,8 @@ def app():
                     inventory_df["month_date_yyyymm"] == int(selected_period)
                 ]
 
-    data_cols = get_data_columns(inventory_df, scale.lower(), frequency.lower())
+    #data_cols = get_data_columns(inventory_df, scale.lower(), frequency.lower())
+    data_cols = ['Value']
 
     with row1_col4:
         selected_col = st.selectbox("Attribute", data_cols)
@@ -343,7 +212,8 @@ def app():
     gdf_null = select_null(gdf, selected_col)
     gdf = select_non_null(gdf, selected_col)
     gdf = gdf.sort_values(by=selected_col, ascending=True)
-    #st.dataframe(gdf)
+
+
     colors = cm.get_palette(palette, n_colors)
     colors = [hex_to_rgb(c) for c in colors]
 
@@ -356,13 +226,13 @@ def app():
         gdf.loc[ind, "B"] = colors[index][2]
 
     initial_view_state = pdk.ViewState(
-        latitude=40,
-        longitude=-100,
+        latitude=53,
+        longitude=10,
         zoom=3,
         max_zoom=16,
         pitch=0,
         bearing=0,
-        height=900,
+        height=600,
         width=None,
     )
 
@@ -411,7 +281,7 @@ def app():
 
     # tooltip_value = f"<b>Value:</b> {median_listing_price}""
     tooltip = {
-        "html": "<b>Name:</b> {NAME}<br><b>Value:</b> {"
+        "html": "<b>Name:</b> {Name}<br><b>Value:</b> {"
         + selected_col
         + "}<br><b>Date:</b> "
         + selected_period

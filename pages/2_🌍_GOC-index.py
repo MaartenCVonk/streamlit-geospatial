@@ -6,6 +6,7 @@ import streamlit as st
 import leafmap.colormaps as cm
 from leafmap.common import hex_to_rgb
 import sys
+import numpy as np
 
 st.set_page_config(layout="wide")
 
@@ -31,14 +32,29 @@ data_links = {
     "monthly_current": {
         "national": directory + "MEI_FIN_19012023181514641.csv",
         "subnational": directory + "MEI_FIN_19012023181514641.csv",
+},
+    "monthly_historic": {
+        "national": directory + "MEI_FIN_19012023181514641.csv",
+        "subnational": directory + "MEI_FIN_19012023181514641.csv",
+},
+    "yearly_all": {
+        "national": directory + "data_iafq_firearms_trafficking.xlsx",
+        "subnational": directory + "data_iafq_firearms_trafficking.xlsx",
 }
 }
-
 #@st.cache
 def get_inventory_data(url):
     df = pd.read_csv(url)
     df['month_date_yyyymm'] = df['TIME'].replace('-', '', regex=True).astype(int)
     df = df[['TIME', 'Country', 'Value', 'month_date_yyyymm']]
+    return df
+
+def get_data(url):
+    df = pd.read_excel(url, skiprows=2)
+    df = df[['Iso3_code', 'Indicator', 'Year', 'VALUE']]
+    df['TIME'] = df['Year']
+    df.rename(columns={'Iso3_code': 'iso3', 'VALUE':'Value'}, inplace=True)
+    df = df[['iso3','TIME','Value']]
     return df
 
 
@@ -52,10 +68,17 @@ def get_start_end_year(df):
     end_year = int(str(df["month_date_yyyymm"].max())[:4])
     return start_year, end_year
 
+def get_start_end_year2(df):
+    start_year = int(str(df["TIME"].min())[:4])
+    end_year = int(str(df["TIME"].max())[:4])
+    return start_year, end_year
+
 
 def get_periods(df):
     return [str(d) for d in list(set(df["month_date_yyyymm"].tolist()))]
 
+def get_periods2(df):
+    return [str(d) for d in list(set(df["TIME"].tolist()))]
 
 #@st.cache
 def get_geom_data(category):
@@ -66,27 +89,32 @@ def get_geom_data(category):
     }
     gdf = gpd.read_file(links[category])
     if category == 'national':
-        gdf = gdf[['name','geometry']]
+        gdf = gdf[['name','geometry', 'iso3']]
         gdf.rename(columns={'name': 'Name'}, inplace=True)
     if category == 'subnational':
-        gdf = gdf[['admin1_name','geometry']]
+        gdf = gdf[['admin1_name','geometry','iso3']]
         gdf.rename(columns={'admin1_name': 'Name'}, inplace=True)
     return gdf
 
 
-def join_attributes(gdf, df, category):
-
+def join_sample_attributes(gdf, df, category):
+    #new_gdf = df.merge(gdf, on='iso3', how='left')
     new_gdf = None
     if category == "national":
         new_gdf = gdf
         new_gdf['TIME'] = 202112
-        new_gdf['Value'] = 1
+        new_gdf['Value'] = 0
     elif category == "subnational":
         new_gdf = gdf
         new_gdf['TIME'] = 202112
-        new_gdf['Value'] = 1
+        new_gdf['Value'] = 0
     return new_gdf
 
+def join_attributes(gdf, df, category):
+    new_gdf = gdf.merge(df, on='iso3', how='inner')
+    new_gdf['TIME'] = new_gdf['TIME'].astype(np.int64)
+    new_gdf['Value'] = new_gdf['Value'].astype(np.int64)
+    return new_gdf
 
 def select_non_null(gdf, col_name):
     new_gdf = gdf[~gdf[col_name].isna()]
@@ -117,17 +145,17 @@ def app():
         [1, 1, 0.6, 1.4, 2]
     )
     with row1_col1:
-        frequency = st.selectbox("Monthly/weekly data", ["Monthly", "Weekly"])
+        frequency = st.selectbox("Yearly/Monthly Data", ["Yearly", "Monthly"])
     with row1_col2:
-        types = ["Current month data", "Historical data"]
-        if frequency == "Weekly":
+        types = ["Current year data", "Historical data"]
+        if frequency == "Monthly":
             types.remove("Current month data")
         cur_hist = st.selectbox(
             "Current/historical data",
             types,
         )
     with row1_col3:
-        if frequency == "Monthly":
+        if frequency == "Yearly":
             scale = st.selectbox(
                 "Scale", ["National", "Subnational"], index=0
             )
@@ -136,16 +164,20 @@ def app():
 
     gdf = get_geom_data(scale.lower())
 
-    if frequency == "Monthly":
-        if cur_hist == "Current month data":
+    if frequency == "Yearly":
+        if cur_hist == "Current year data":
             inventory_df = get_inventory_data(data_links["monthly_current"][scale.lower()])
+            inventory_df_2 = get_data(data_links["yearly_all"][scale.lower()])
+            inventory_df_2 = inventory_df_2.drop_duplicates(subset=['iso3'])
             selected_period = get_periods(inventory_df)[0]
+            selected_period = get_periods2(inventory_df_2)[0]
         else:
             with row1_col2:
-                inventory_df = get_inventory_data(data_links["monthly_historical"][scale.lower()])
-                start_year, end_year = get_start_end_year(inventory_df)
-                periods = get_periods(inventory_df)
-                with st.expander("Select year and month", True):
+                inventory_df = get_inventory_data(data_links["monthly_historic"][scale.lower()])
+                inventory_df_2 = get_data(data_links["yearly_all"][scale.lower()])
+                start_year, end_year = get_start_end_year2(inventory_df_2)
+                periods = get_periods2(inventory_df_2)
+                with st.expander("Select year", True):
                     selected_year = st.slider(
                         "Year",
                         start_year,
@@ -153,21 +185,16 @@ def app():
                         value=start_year,
                         step=1,
                     )
-                    selected_month = st.slider(
-                        "Month",
-                        min_value=1,
-                        max_value=12,
-                        value=int(periods[0][-2:]),
-                        step=1,
-                    )
-                selected_period = str(selected_year) + str(selected_month).zfill(2)
+                selected_period = str(selected_year)
                 if selected_period not in periods:
                     st.error("Data not available for selected year and month")
                     selected_period = periods[0]
                 inventory_df = inventory_df[
                     inventory_df["month_date_yyyymm"] == int(selected_period)
                 ]
-
+                inventory_df_2 = inventory_df_2[
+                    inventory_df_2["TIME"] == int(selected_period)
+                ]
     #data_cols = get_data_columns(inventory_df, scale.lower(), frequency.lower())
     data_cols = ['Value']
 
@@ -208,10 +235,13 @@ def app():
         else:
             elev_scale = 1
 
-    gdf = join_attributes(gdf, inventory_df, scale.lower())
+    gdf = join_attributes(gdf, inventory_df_2, scale.lower())
     gdf_null = select_null(gdf, selected_col)
     gdf = select_non_null(gdf, selected_col)
     gdf = gdf.sort_values(by=selected_col, ascending=True)
+    gdf = gdf.drop_duplicates(subset=['iso3'])
+    gdf = gdf[['Name', 'geometry', 'iso3', 'TIME', 'Value']]
+
 
 
     colors = cm.get_palette(palette, n_colors)
@@ -278,7 +308,6 @@ def app():
     )
 
     # tooltip = {"text": "Name: {NAME}"}
-
     # tooltip_value = f"<b>Value:</b> {median_listing_price}""
     tooltip = {
         "html": "<b>Name:</b> {Name}<br><b>Value:</b> {"

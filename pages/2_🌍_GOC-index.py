@@ -5,7 +5,6 @@ import geopandas as gpd
 import streamlit as st
 import leafmap.colormaps as cm
 from leafmap.common import hex_to_rgb
-import sys
 import numpy as np
 
 st.set_page_config(layout="wide")
@@ -26,16 +25,16 @@ st.sidebar.info(
     """
 )
 
-link_prefix = "https://storage.googleapis.com/location-grid-gis-layers/"
-directory = os.path.join(os.getcwd(), "data/")
+link_prefix = "https://storage.googleapis.com/location-grid-gis-layers/" #directory for subnational geom data
+directory = os.path.join(os.getcwd(), "data/") #directory for national geom data and attribute data
 data_links = {
     "monthly_current": {
-        "national": directory + "MEI_FIN_19012023181514641.csv",
-        "subnational": directory + "MEI_FIN_19012023181514641.csv",
+        "national": directory + "data_iafq_firearms_trafficking.csv",
+        "subnational": directory + "data_iafq_firearms_trafficking.csv",
 },
     "monthly_historic": {
-        "national": directory + "MEI_FIN_19012023181514641.csv",
-        "subnational": directory + "MEI_FIN_19012023181514641.csv",
+        "national": directory + "data_iafq_firearms_trafficking.csv",
+        "subnational": directory + "data_iafq_firearms_trafficking.csv",
 },
     "yearly_all": {
         "national": directory + "data_iafq_firearms_trafficking.xlsx",
@@ -43,41 +42,38 @@ data_links = {
 }
 }
 #@st.cache
-def get_inventory_data(url):
-    df = pd.read_csv(url)
-    df['month_date_yyyymm'] = df['TIME'].replace('-', '', regex=True).astype(int)
-    df = df[['TIME', 'Country', 'Value', 'month_date_yyyymm']]
-    return df
-
 def get_data(url):
+    """
+    TODO: Needs to be rewritten
+    """
     df = pd.read_excel(url, skiprows=2)
-    df = df[['Iso3_code', 'Indicator', 'Year', 'VALUE']]
+    df = df[['Iso3_code', 'Indicator', 'Year', 'VALUE', 'Dimension', 'Category']]
+    df = df[(df['Dimension'] == 'Total') & (df['Category'] == 'Total')] #TODO: wasting information here
+    df.drop(columns=['Dimension', 'Category'], inplace=True)
+    df.rename(columns={'Iso3_code': 'iso3','VALUE':'Value'}, inplace=True)
+    df = df.groupby(['iso3', 'Year',
+                         'Indicator']).mean().reset_index()  # TODO: information is being lost by aggregating here, reformulate
+    df.set_index(['iso3', 'Year', 'Indicator'], inplace=True)
+    df = df.unstack(['Indicator']).reset_index().droplevel(level=0, axis=1).reset_index(
+        drop=True)  # TODO rewrite, preferably without explicitnly naming columns
+    df.columns = ['iso3', 'Year', 'Ammunition seized', 'Arms seized',
+                    'Individuals arrested/suspected for illicit trafficking in weapons',
+                    'Individuals convicted for illicit trafficking in weapons',
+                    'Individuals prosecuted for illicit trafficking in weapons',
+                    'Individuals targeted by criminal justice system due to illicit trafficking in weapons',
+                    'Instances/cases of seizures', 'Parts and components seized']
     df['TIME'] = df['Year']
-    df.rename(columns={'Iso3_code': 'iso3', 'VALUE':'Value'}, inplace=True)
-    df = df[['iso3','TIME','Value']]
     return df
-
-
-def filter_weekly_inventory(df, week):
-    df = df[df["week_end_date"] == week]
-    return df
-
 
 def get_start_end_year(df):
-    start_year = int(str(df["month_date_yyyymm"].min())[:4])
-    end_year = int(str(df["month_date_yyyymm"].max())[:4])
-    return start_year, end_year
-
-def get_start_end_year2(df):
-    start_year = int(str(df["TIME"].min())[:4])
+    """
+    Define start and end-year in monitor. Start with median of years.
+    """
+    start_year = int(str(df["TIME"].median())[:4])
     end_year = int(str(df["TIME"].max())[:4])
     return start_year, end_year
 
-
 def get_periods(df):
-    return [str(d) for d in list(set(df["month_date_yyyymm"].tolist()))]
-
-def get_periods2(df):
     return [str(d) for d in list(set(df["TIME"].tolist()))]
 
 #@st.cache
@@ -98,7 +94,6 @@ def get_geom_data(category):
 
 
 def join_sample_attributes(gdf, df, category):
-    #new_gdf = df.merge(gdf, on='iso3', how='left')
     new_gdf = None
     if category == "national":
         new_gdf = gdf
@@ -111,15 +106,13 @@ def join_sample_attributes(gdf, df, category):
     return new_gdf
 
 def join_attributes(gdf, df, category):
-    new_gdf = gdf.merge(df, on='iso3', how='inner')
-    new_gdf['TIME'] = new_gdf['TIME'].astype(np.int64)
-    new_gdf['Value'] = new_gdf['Value'].astype(np.int64)
+    df['TIME'] = df['TIME'].astype(np.int64)
+    new_gdf = gdf.merge(df, on='iso3', how='right')
     return new_gdf
 
 def select_non_null(gdf, col_name):
     new_gdf = gdf[~gdf[col_name].isna()]
     return new_gdf
-
 
 def select_null(gdf, col_name):
     new_gdf = gdf[gdf[col_name].isna()]
@@ -132,15 +125,10 @@ def get_data_dict(name):
     desc = list(df[df["Name"] == name]["Description"])[0]
     return label, desc
 
-
 def app():
 
     st.title("Organised Crime Index")
-    st.markdown(
-        """**Introduction:** Organised crime index.
-    """
-    )
-
+    st.markdown("""**Introduction:** Organised crime index.""")
     row1_col1, row1_col2, row1_col3, row1_col4, row1_col5 = st.columns(
         [1, 1, 0.6, 1.4, 2]
     )
@@ -152,8 +140,7 @@ def app():
             types.remove("Current month data")
         cur_hist = st.selectbox(
             "Current/historical data",
-            types,
-        )
+            types,)
     with row1_col3:
         if frequency == "Yearly":
             scale = st.selectbox(
@@ -166,17 +153,15 @@ def app():
 
     if frequency == "Yearly":
         if cur_hist == "Current year data":
-            inventory_df = get_inventory_data(data_links["monthly_current"][scale.lower()])
-            inventory_df_2 = get_data(data_links["yearly_all"][scale.lower()])
-            inventory_df_2 = inventory_df_2.drop_duplicates(subset=['iso3'])
-            selected_period = get_periods(inventory_df)[0]
-            selected_period = get_periods2(inventory_df_2)[0]
+            joined_data = get_data(data_links["yearly_all"][scale.lower()])
+            joined_data = joined_data.drop_duplicates(subset=['iso3'])
+            selected_period = max(get_periods(joined_data))
+            st.write(selected_period)
         else:
             with row1_col2:
-                inventory_df = get_inventory_data(data_links["monthly_historic"][scale.lower()])
-                inventory_df_2 = get_data(data_links["yearly_all"][scale.lower()])
-                start_year, end_year = get_start_end_year2(inventory_df_2)
-                periods = get_periods2(inventory_df_2)
+                joined_data = get_data(data_links["yearly_all"][scale.lower()])
+                start_year, end_year = get_start_end_year(joined_data)
+                periods = get_periods(joined_data)
                 with st.expander("Select year", True):
                     selected_year = st.slider(
                         "Year",
@@ -189,17 +174,18 @@ def app():
                 if selected_period not in periods:
                     st.error("Data not available for selected year and month")
                     selected_period = periods[0]
-                inventory_df = inventory_df[
-                    inventory_df["month_date_yyyymm"] == int(selected_period)
+                joined_data = joined_data[
+                    joined_data["TIME"] == int(selected_period)
                 ]
-                inventory_df_2 = inventory_df_2[
-                    inventory_df_2["TIME"] == int(selected_period)
-                ]
-    #data_cols = get_data_columns(inventory_df, scale.lower(), frequency.lower())
-    data_cols = ['Value']
+    data_cols = ['Ammunition seized', 'Arms seized',
+                    'Individuals arrested/suspected for illicit trafficking in weapons',
+                    'Individuals convicted for illicit trafficking in weapons',
+                    'Individuals prosecuted for illicit trafficking in weapons',
+                    'Individuals targeted by criminal justice system due to illicit trafficking in weapons',
+                    'Instances/cases of seizures', 'Parts and components seized']
 
     with row1_col4:
-        selected_col = st.selectbox("Attribute", data_cols)
+        selected_col = st.selectbox("Attribute", data_cols, index=1)
     with row1_col5:
         show_desc = st.checkbox("Show attribute description")
         if show_desc:
@@ -235,12 +221,17 @@ def app():
         else:
             elev_scale = 1
 
-    gdf = join_attributes(gdf, inventory_df_2, scale.lower())
+    gdf = join_attributes(gdf, joined_data, scale.lower())
     gdf_null = select_null(gdf, selected_col)
     gdf = select_non_null(gdf, selected_col)
     gdf = gdf.sort_values(by=selected_col, ascending=True)
     gdf = gdf.drop_duplicates(subset=['iso3'])
-    gdf = gdf[['Name', 'geometry', 'iso3', 'TIME', 'Value']]
+    gdf = gdf[['Name', 'geometry', 'iso3', 'TIME', 'Ammunition seized', 'Arms seized',
+                    'Individuals arrested/suspected for illicit trafficking in weapons',
+                    'Individuals convicted for illicit trafficking in weapons',
+                    'Individuals prosecuted for illicit trafficking in weapons',
+                    'Individuals targeted by criminal justice system due to illicit trafficking in weapons',
+                    'Instances/cases of seizures', 'Parts and components seized']]
 
 
 
@@ -299,8 +290,6 @@ def app():
         filled=True,
         extruded=False,
         wireframe=True,
-        # get_elevation="properties.ALAND/100000",
-        # get_fill_color="color",
         get_fill_color=[200, 200, 200],
         get_line_color=[0, 0, 0],
         get_line_width=2,
@@ -312,7 +301,7 @@ def app():
     tooltip = {
         "html": "<b>Name:</b> {Name}<br><b>Value:</b> {"
         + selected_col
-        + "}<br><b>Date:</b> "
+        + "}<br><b>Year:</b> "
         + selected_period
         + "",
         "style": {"backgroundColor": "steelblue", "color": "white"},
@@ -346,26 +335,5 @@ def app():
                 font_size=10,
             )
         )
-    # row4_col1, row4_col2, row4_col3 = st.columns([1, 2, 3])
-    # with row4_col1:
-    #     show_data = st.checkbox("Show raw data")
-    # with row4_col2:
-    #     show_cols = st.multiselect("Select columns", data_cols)
-    # with row4_col3:
-    #     show_colormaps = st.checkbox("Preview all color palettes")
-    #     if show_colormaps:
-    #         st.write(cm.plot_colormaps(return_fig=True))
-    # if show_data:
-    #     if scale == "National":
-    #         st.dataframe(gdf[["NAME", "GEOID"] + show_cols])
-    #     elif scale == "State":
-    #         st.dataframe(gdf[["NAME", "STUSPS"] + show_cols])
-    #     elif scale == "County":
-    #         st.dataframe(gdf[["NAME", "STATEFP", "COUNTYFP"] + show_cols])
-    #     elif scale == "Metro":
-    #         st.dataframe(gdf[["NAME", "CBSAFP"] + show_cols])
-    #     elif scale == "Zip":
-    #         st.dataframe(gdf[["GEOID10"] + show_cols])
-
 
 app()

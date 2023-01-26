@@ -21,8 +21,20 @@ gdf = gpd.read_file(directory1)
 print(gdf.columns)
 
 data = pd.read_excel(directory2, skiprows=2)
-data = data[['Iso3_code','Indicator','Year','VALUE']]
+data = data[['Iso3_code','Indicator','Year','VALUE','Dimension', 'Category']]
+data = data[(data['Dimension'] == 'Total') & (data['Category'] == 'Total')]
+data.drop(columns = ['Dimension', 'Category'], inplace=True)
 data.rename(columns={'Iso3_code':'iso3'}, inplace=True)
+data = data.groupby(['iso3','Year','Indicator']).mean().reset_index() #TODO: information is being lost by aggregating here, reformulate
+data.set_index(['iso3','Year','Indicator'], inplace=True)
+data = data.unstack(['Indicator']).reset_index().droplevel(level=0, axis=1).reset_index(drop=True) #TODO rewrite, preferably without explicitnly naming columns
+data.columns = ['iso3','Year','Ammunition seized', 'Arms seized',
+       'Individuals arrested/suspected for illicit trafficking in weapons',
+       'Individuals convicted for illicit trafficking in weapons',
+       'Individuals prosecuted for illicit trafficking in weapons',
+       'Individuals targeted by criminal justice system due to illicit trafficking in weapons',
+       'Instances/cases of seizures', 'Parts and components seized']
+sys.exit()
 data = data.merge(gdf, on='iso3', how='left')
 print(data.head(5))
 print(data.columns)

@@ -41,7 +41,7 @@ data_links = {
         "subnational": directory + "data_iafq_firearms_trafficking.xlsx",
 }
 }
-#@st.cache
+@st.cache
 def get_data(url):
     """
     TODO: Needs to be rewritten
@@ -76,18 +76,20 @@ def get_start_end_year(df):
 def get_periods(df):
     return [str(d) for d in list(set(df["TIME"].tolist()))]
 
-#@st.cache
+#@st.cache(allow_output_mutation=True)
 def get_geom_data(category):
     prefix = ("https://storage.googleapis.com/location-grid-gis-layers/")
     links = {
-        "national":  directory+ "world-administrative-boundaries.geojson",
-        "subnational": prefix + "fra_admin1.geojson",
+        "national":  directory + "world-administrative-boundaries.geojson",
+        "subnational": prefix + "nld_admin1.geojson",
     }
-    gdf = gpd.read_file(links[category])
     if category == 'national':
+        gdf = gpd.read_file(links[category])
         gdf = gdf[['name','geometry', 'iso3']]
         gdf.rename(columns={'name': 'Name'}, inplace=True)
     if category == 'subnational':
+        gdf = gpd.read_file(links[category])
+        gdf.rename(columns={'admin0_code':'iso3'}, inplace=True)
         gdf = gdf[['admin1_name','geometry','iso3']]
         gdf.rename(columns={'admin1_name': 'Name'}, inplace=True)
     return gdf
@@ -106,8 +108,12 @@ def join_sample_attributes(gdf, df, category):
     return new_gdf
 
 def join_attributes(gdf, df, category):
-    df['TIME'] = df['TIME'].astype(np.int64)
-    new_gdf = gdf.merge(df, on='iso3', how='right')
+    if category == 'national':
+        df['TIME'] = df['TIME'].astype(np.int64)
+        new_gdf = gdf.merge(df, on='iso3', how='right')
+    if category == 'subnational':
+        df['TIME'] = df['TIME'].astype(np.int64)
+        new_gdf = gdf.merge(df, on='iso3', how='left')
     return new_gdf
 
 def select_non_null(gdf, col_name):
@@ -123,40 +129,37 @@ def get_data_dict(name):
     df = pd.read_csv(in_csv)
     label = list(df[df["Name"] == name]["Label"])[0]
     desc = list(df[df["Name"] == name]["Description"])[0]
-    return label, desc
+    source = list(df[df["Name"] == name]["Source"])[0]
+    return label, desc, source
 
 def app():
-
     st.title("Organised Crime Index")
     st.markdown("""**Introduction:** Organised crime index.""")
-    row1_col1, row1_col2, row1_col3, row1_col4, row1_col5 = st.columns(
-        [1, 1, 0.6, 1.4, 2]
+    row1_col1, row1_col2, row1_col3, row1_col4, row1_col5, row1_col6 = st.columns(
+        [0.6, 0.7, 0.8, 0.8, 2, 2]
     )
     with row1_col1:
-        frequency = st.selectbox("Yearly/Monthly Data", ["Yearly", "Monthly"])
+        frequency = st.selectbox("Time Dimension", ["Yearly", "Monthly"])
     with row1_col2:
         types = ["Current year data", "Historical data"]
         if frequency == "Monthly":
             types.remove("Current month data")
         cur_hist = st.selectbox(
-            "Current/historical data",
+            "Time",
             types,)
     with row1_col3:
         if frequency == "Yearly":
             scale = st.selectbox(
-                "Scale", ["National", "Subnational"], index=0
+                "Space Dimension", ["National", "Subnational"], index=1
             )
         else:
             scale = st.selectbox("Scale", ["National", 'Subnational'], index=0)
 
     gdf = get_geom_data(scale.lower())
-
     if frequency == "Yearly":
         if cur_hist == "Current year data":
             joined_data = get_data(data_links["yearly_all"][scale.lower()])
-            joined_data = joined_data.drop_duplicates(subset=['iso3'])
             selected_period = max(get_periods(joined_data))
-            st.write(selected_period)
         else:
             with row1_col2:
                 joined_data = get_data(data_links["yearly_all"][scale.lower()])
@@ -173,10 +176,7 @@ def app():
                 selected_period = str(selected_year)
                 if selected_period not in periods:
                     st.error("Data not available for selected year and month")
-                    selected_period = periods[0]
-                joined_data = joined_data[
-                    joined_data["TIME"] == int(selected_period)
-                ]
+        joined_data = joined_data[joined_data["TIME"] == int(selected_period)]
     data_cols = ['Ammunition seized', 'Arms seized',
                     'Individuals arrested/suspected for illicit trafficking in weapons',
                     'Individuals convicted for illicit trafficking in weapons',
@@ -190,13 +190,24 @@ def app():
         show_desc = st.checkbox("Show attribute description")
         if show_desc:
             try:
-                label, desc = get_data_dict(selected_col.strip())
+                label, desc, source = get_data_dict(selected_col.strip())
                 markdown = f"""
                 **{label}**: {desc}
                 """
                 st.markdown(markdown)
             except:
                 st.warning("No description available for selected attribute")
+    with row1_col6:
+        show_source = st.checkbox("Show source")
+        if show_source:
+            try:
+                label, desc, source = get_data_dict(selected_col.strip())
+                markdown = f"""
+                **{source}**
+                """
+                st.markdown(markdown)
+            except:
+                st.warning("No source available for selected attribute")
 
     row2_col1, row2_col2, row2_col3, row2_col4, row2_col5, row2_col6 = st.columns(
         [0.6, 0.68, 0.7, 0.7, 1.5, 0.8]
@@ -223,17 +234,16 @@ def app():
 
     gdf = join_attributes(gdf, joined_data, scale.lower())
     gdf_null = select_null(gdf, selected_col)
+
     gdf = select_non_null(gdf, selected_col)
     gdf = gdf.sort_values(by=selected_col, ascending=True)
-    gdf = gdf.drop_duplicates(subset=['iso3'])
+
     gdf = gdf[['Name', 'geometry', 'iso3', 'TIME', 'Ammunition seized', 'Arms seized',
                     'Individuals arrested/suspected for illicit trafficking in weapons',
                     'Individuals convicted for illicit trafficking in weapons',
                     'Individuals prosecuted for illicit trafficking in weapons',
                     'Individuals targeted by criminal justice system due to illicit trafficking in weapons',
                     'Instances/cases of seizures', 'Parts and components seized']]
-
-
 
     colors = cm.get_palette(palette, n_colors)
     colors = [hex_to_rgb(c) for c in colors]
